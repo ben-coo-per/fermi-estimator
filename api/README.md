@@ -9,6 +9,7 @@
 
 ## 👩‍💻 Running Locally
 
-- Install packages with pip using `pip install -r requirements.txt`
 - `cd` into the `api/` dir
+- Install packages with pip using `pip install -r requirements.txt`
+- Create `.env` file and add `OPENAI_API_KEY`
 - Run locally using `hypercorn main:app --reload`

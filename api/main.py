@@ -7,7 +7,7 @@ app = FastAPI()
 
 
 @app.get("/")
-def problem():
+def generate_problem():
     return generate_fermi_problem()
 
 

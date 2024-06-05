@@ -5,7 +5,7 @@ __pycache__/
 # Virtual environment
 venv/
 .env
-pico/config.py
+pico/WIFI_CONFIG.py
 
 # IDE specific files
 *.vscode/

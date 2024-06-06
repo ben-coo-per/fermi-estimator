@@ -5,6 +5,8 @@ from consts import INKY_BUTTONS
 
 from pimoroni import Button
 from picographics import PicoGraphics, DISPLAY_INKY_PACK
+from rotary_irq_rp2 import RotaryIRQ
+from machine import Pin
 
 import ujson
 
@@ -24,8 +26,16 @@ Connects to wifi and queries either the `generate_problem`("/") or the `make_est
 button_a = Button(12)
 button_b = Button(13)
 button_c = Button(14)
-# rot_enc = Button(15)
-# rot_enc_button = Button(16)
+rot_enc_button = Pin(7, Pin.IN, Pin.PULL_UP)
+rot_enc = RotaryIRQ(
+    pin_num_clk=8,
+    pin_num_dt=9,
+    min_val=0,
+    max_val=20,
+    incr=1,
+    reverse=False,
+    range_mode=RotaryIRQ.RANGE_BOUNDED,
+)
 
 
 # a handy function we can call to clear the screen
@@ -101,19 +111,79 @@ class AnswerInputPage:
         self.graphics = graphics
         self.WIDTH = WIDTH
         self.HEIGHT = HEIGHT
+        graphics.set_update_speed(3)
 
-        self.value = 1000
+        self.msd = 0  # most_significant_digit (1-9)
+        self.num_digits = 1  # number of digits
+        self.updating_digit_count = False
+        self.value = self.calculate_final_number()
         self.render()
 
-    def render(self):
+    def calculate_final_number(self):
+        # Subtract 1 from digits because msd is already the first digit
+        return self.msd * (10 ** (self.num_digits - 1))
+
+    def page_layout(self):
         clear()
         self.graphics.set_pen(0)
         self.graphics.text("Answer", 10, 5, wordwrap=self.WIDTH - 20, scale=1)
         self.graphics.text("Your estimate", 10, 24, scale=2)
-        self.graphics.text(str(self.value), 10, 48, scale=3)
-
         set_page_controls(self, "ANSWER")
+
+    def render(self):
+        self.page_layout()
+        self.graphics.text("_", 10, 48, scale=3)
         self.graphics.update()
+
+        while True:
+            try:
+                val_new = rot_enc.value()
+                if rot_enc_button.value() == 0:
+                    # Rot encoder button pressed
+                    print("called button press")
+                    number_to_display = str(self.calculate_final_number()) + "_"
+                    self.page_layout()
+                    self.graphics.text(number_to_display, 10, 48, scale=3)
+                    self.graphics.update()
+
+                    if self.updating_digit_count:
+                        self.value = self.calculate_final_number()
+
+                    else:
+                        rot_enc.set(value=self.num_digits)
+                        val_new = self.num_digits
+                        self.updating_digit_count = True
+                    while rot_enc_button.value() == 0:
+                        continue
+
+                if not self.updating_digit_count:
+                    # updating the first digit
+                    # first digit must be 1-9
+                    if val_new != self.msd and val_new > 0 and val_new < 10:
+                        self.msd = val_new
+                        number_to_display = str(self.calculate_final_number())
+                        self.page_layout()
+                        self.graphics.text(number_to_display, 10, 48, scale=3)
+                        self.graphics.update()
+
+                else:
+                    # updating the number of digits
+                    if val_new != self.num_digits and val_new > 0:
+                        self.num_digits = val_new
+                        number_to_display = str(self.calculate_final_number()) + "_"
+                        self.page_layout()
+                        self.graphics.text(number_to_display, 10, 48, scale=3)
+                        self.graphics.update()
+
+                    if val_new <= 0:
+                        # if the user has scrolled down to 0, go back to editing the first digit
+                        self.updating_digit_count = False
+                        rot_enc.set(value=self.msd)
+                        print("switching to first digit...")
+
+                time.sleep_ms(50)
+            except KeyboardInterrupt:
+                break
 
 
 class ResultPage:
@@ -142,12 +212,23 @@ def set_page_controls(self, page):
         self.graphics.text(*INKY_BUTTONS["FWD"], 240, 3)
 
 
+PAGE_MAP = {
+    "TITLE": TitlePage,
+    "QUESTION": QuestionPage,
+    "ANSWER": AnswerInputPage,
+    "RESULT": ResultPage,
+}
+
+
 class AppState:
+
     def __init__(self):
         self.question = None
         self.answer = None
-        self.current_page = TitlePage(graphics, WIDTH, HEIGHT)
         self.current_page_key = "TITLE"
+        self.current_page = self.current_page = PAGE_MAP[self.current_page_key](
+            graphics, WIDTH, HEIGHT
+        )
         self.loading_question = False
         self.loading_answer = False
         self.is_connected = False
@@ -158,9 +239,11 @@ class AppState:
 
     def fetch_question(self):
         print("Fetching question...")
-        res = urequests.get(WIFI_CONFIG.ENDPOINT)
-        self.question = res.text
-        print(f"Question fetched: {self.question}")
+        try:
+            res = urequests.get(WIFI_CONFIG.ENDPOINT)
+            self.question = res.text
+        except Exception as e:
+            print(f"Error fetching question: {e}")
 
     async def fetch_answer(self, *args, **kwargs):
         print("Starting fetch_answer...")
@@ -169,22 +252,26 @@ class AppState:
             return
         self.loading_answer = True
         print("Waiting for answer...")
-        res = urequests.post(
-            WIFI_CONFIG.ENDPOINT + "estimate",
-            data=ujson.dumps({"fermi_problem": self.question}),
-        )
-        print(f"Answer received: {res.text}")
-        self.answer = res.text
+        MAX_RETRIES = 3
+        retries = 0
+        while retries < MAX_RETRIES:
+            if self.answer:
+                break
+            try:
+                res = urequests.post(
+                    WIFI_CONFIG.ENDPOINT + "estimate",
+                    data=ujson.dumps({"fermi_problem": self.question}),
+                )
+                print(f"Answer received: {res.text}")
+                self.answer = res.text
+            except Exception as e:
+                print(f"Error fetching answer: {e}")
+                retries += 1
+            await uasyncio.sleep(0.3)
+
         self.loading_answer = False
 
     def set_page(self, page_key: str):
-        PAGE_MAP = {
-            "TITLE": TitlePage,
-            "QUESTION": QuestionPage,
-            "ANSWER": AnswerInputPage,
-            "RESULT": ResultPage,
-        }
-
         print(f"Setting page to: {page_key}")
         if page_key == "TITLE":
             self.reset_problem()
@@ -194,7 +281,6 @@ class AppState:
             self.loading_question = True
             del self.current_page
             self.current_page = LoadingPage(graphics, WIDTH, HEIGHT)
-            print("Loading question...")
             self.fetch_question()
             self.loading_question = False
 
@@ -213,9 +299,7 @@ app_state = AppState()
 
 
 def connection_status_handler(mode, status, ip):
-    clear()
-    graphics.set_pen(0)
-    graphics.text("Network: {}".format(WIFI_CONFIG.SSID), 10, 10, scale=2)
+    print("Network: {}".format(WIFI_CONFIG.SSID))
     status_text = "Connecting..."
     if status is not None:
         if status:
@@ -224,9 +308,8 @@ def connection_status_handler(mode, status, ip):
         else:
             status_text = "Connection failed!"
 
-    graphics.text(status_text, 10, 30, scale=2)
-    graphics.text("IP: {}".format(ip), 10, 60, scale=2)
-    graphics.update()
+    print(status_text)
+    print("IP: {}")
 
 
 network_manager = NetworkManager(
@@ -235,8 +318,10 @@ network_manager = NetworkManager(
 
 
 async def main_loop():
+    await network_manager.client(WIFI_CONFIG.SSID, WIFI_CONFIG.PSK)
     while True:
         if button_a.read() and PAGE_CONFIG[app_state.current_page_key][2]:
+            print("Button A pressed")
             app_state.set_page("TITLE")
             await uasyncio.sleep(0.5)
         elif button_b.read() and PAGE_CONFIG[app_state.current_page_key][3]:

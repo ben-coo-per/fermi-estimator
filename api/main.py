@@ -44,3 +44,8 @@ def make_estimations(req: FermiProblemEstimateRequest):
     )  # round to the nearest whole number within the order of magnitude
 
     return rounded_estimate
+
+
+@app.get("/test")
+def foo():
+    return "foo bar baz"

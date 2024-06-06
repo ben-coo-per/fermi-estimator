@@ -53,7 +53,7 @@ This is a dictionary that maps the current page to the next and previous pages a
 """
 PAGE_CONFIG = {
     "TITLE": ("QUESTION", None, 0, 0, 1),
-    "QUESTION": ("ANSWER", None, 1, 0, 1),
+    "QUESTION": ("ANSWER", None, 0, 0, 1),
     "ANSWER": ("RESULT", "QUESTION", 1, 1, 1),
     "RESULT": (None, None, 1, 0, 0),
 }
@@ -83,7 +83,7 @@ class TitlePage:
     def render(self):
         clear()
         self.graphics.set_pen(0)
-        self.graphics.text("Baaaaaallpark", 10, 10, wordwrap=self.WIDTH - 20, scale=2)
+        self.graphics.text("BALLPARK", 20, 45, wordwrap=self.WIDTH - 20, scale=4)
         set_page_controls(self, "TITLE")
         self.graphics.update()
 
@@ -111,12 +111,15 @@ class AnswerInputPage:
         self.graphics = graphics
         self.WIDTH = WIDTH
         self.HEIGHT = HEIGHT
+        clear()
+        graphics.update()
         graphics.set_update_speed(3)
 
         self.msd = 0  # most_significant_digit (1-9)
         self.num_digits = 1  # number of digits
         self.updating_digit_count = False
         self.value = self.calculate_final_number()
+        self.answer_locked = False
         self.render()
 
     def calculate_final_number(self):
@@ -135,7 +138,7 @@ class AnswerInputPage:
         self.graphics.text("_", 10, 48, scale=3)
         self.graphics.update()
 
-        while True:
+        while not self.answer_locked:
             try:
                 val_new = rot_enc.value()
                 if rot_enc_button.value() == 0:
@@ -148,6 +151,10 @@ class AnswerInputPage:
 
                     if self.updating_digit_count:
                         self.value = self.calculate_final_number()
+                        app_state.set_user_answer(self.value)
+                        rot_enc.reset()
+                        self.answer_locked = True
+                        break
 
                     else:
                         rot_enc.set(value=self.num_digits)
@@ -188,6 +195,7 @@ class AnswerInputPage:
 
 class ResultPage:
     def __init__(self, graphics, WIDTH, HEIGHT):
+        graphics.set_update_speed(2)
         self.graphics = graphics
         self.WIDTH = WIDTH
         self.HEIGHT = HEIGHT
@@ -196,8 +204,15 @@ class ResultPage:
     def render(self):
         clear()
         self.graphics.set_pen(0)
-        self.graphics.text("Result", 10, 10, wordwrap=self.WIDTH - 20, scale=2)
+        self.graphics.text("Result", 10, 5, wordwrap=self.WIDTH - 20, scale=1)
         set_page_controls(self, "RESULT")
+
+        self.graphics.text("Your estimate", 10, 20, scale=2)
+        self.graphics.text(str(app_state.user_answer), 10, 40, scale=3)
+
+        self.graphics.text("Machine says", 10, 75, scale=2)
+        self.graphics.text(str(app_state.answer), 10, 95, scale=3)
+
         self.graphics.update()
 
 
@@ -225,6 +240,7 @@ class AppState:
     def __init__(self):
         self.question = None
         self.answer = None
+        self.user_answer = None
         self.current_page_key = "TITLE"
         self.current_page = self.current_page = PAGE_MAP[self.current_page_key](
             graphics, WIDTH, HEIGHT
@@ -236,6 +252,9 @@ class AppState:
     def reset_problem(self):
         self.question = None
         self.answer = None
+
+    def set_user_answer(self, user_answer):
+        self.user_answer = user_answer
 
     def fetch_question(self):
         print("Fetching question...")
@@ -290,8 +309,8 @@ class AppState:
 
         del self.current_page
         self.current_page_key = page_key
-        self.current_page = PAGE_MAP[page_key](graphics, WIDTH, HEIGHT)
         print(f"Page set to: {page_key}")
+        self.current_page = PAGE_MAP[page_key](graphics, WIDTH, HEIGHT)
 
 
 graphics.set_update_speed(2)  # 0 (slowest) to 3 (fastest)
